@@ -179,28 +179,24 @@ def draw_flashlight_cone(visibility, scr_px, scr_py):
 
 
 def draw_wall_shadows(darkness, p_center_x, p_center_y):
-    """Re-occlude light that would otherwise leak through wall tiles."""
-    for wall in generator.walls:
-        wx, wy, ww, wh = wall
-        w_center_x = wx + ww / 2
-        w_center_y = wy + wh / 2
-        if math.hypot(w_center_x - p_center_x, w_center_y - p_center_y) > player.view_radius + SHADOW_CULL_PADDING:
+    """Re-occlude light that would otherwise leak through merged wall edges."""
+    for x1, y1, x2, y2 in generator.wall_segments:
+        mid_x = (x1 + x2) / 2
+        mid_y = (y1 + y2) / 2
+        if math.hypot(mid_x - p_center_x, mid_y - p_center_y) > player.view_radius + SHADOW_CULL_PADDING:
             continue
 
-        vertices = [(wx, wy), (wx + ww, wy), (wx + ww, wy + wh), (wx, wy + wh)]
-        for i, v1 in enumerate(vertices):
-            v2 = vertices[(i + 1) % len(vertices)]
-            s_v1x, s_v1y = v1[0] - cam_x, v1[1] - cam_y
-            s_v2x, s_v2y = v2[0] - cam_x, v2[1] - cam_y
-            d1x, d1y = v1[0] - p_center_x, v1[1] - p_center_y
-            d2x, d2y = v2[0] - p_center_x, v2[1] - p_center_y
-            mag1 = math.hypot(d1x, d1y) or 1
-            mag2 = math.hypot(d2x, d2y) or 1
-            p1x = s_v1x + (d1x / mag1) * SHADOW_EXTENSION
-            p1y = s_v1y + (d1y / mag1) * SHADOW_EXTENSION
-            p2x = s_v2x + (d2x / mag2) * SHADOW_EXTENSION
-            p2y = s_v2y + (d2y / mag2) * SHADOW_EXTENSION
-            pg.draw.polygon(darkness, DARKNESS_COLOR, [(s_v1x, s_v1y), (s_v2x, s_v2y), (p2x, p2y), (p1x, p1y)])
+        s_x1, s_y1 = x1 - cam_x, y1 - cam_y
+        s_x2, s_y2 = x2 - cam_x, y2 - cam_y
+        d1x, d1y = x1 - p_center_x, y1 - p_center_y
+        d2x, d2y = x2 - p_center_x, y2 - p_center_y
+        mag1 = math.hypot(d1x, d1y) or 1
+        mag2 = math.hypot(d2x, d2y) or 1
+        p1x = s_x1 + (d1x / mag1) * SHADOW_EXTENSION
+        p1y = s_y1 + (d1y / mag1) * SHADOW_EXTENSION
+        p2x = s_x2 + (d2x / mag2) * SHADOW_EXTENSION
+        p2y = s_y2 + (d2y / mag2) * SHADOW_EXTENSION
+        pg.draw.polygon(darkness, DARKNESS_COLOR, [(s_x1, s_y1), (s_x2, s_y2), (p2x, p2y), (p1x, p1y)])
 
 
 gl.run()

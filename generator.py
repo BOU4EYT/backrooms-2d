@@ -25,8 +25,65 @@ EXIT_CELL = 3
 
 map_width, map_height = 0, 0
 walls, floors, hazard_tiles, exit_tiles = [], [], [], []
+wall_segments = []
 spawn_x, spawn_y = 100, 100
 room_type_grid = []
+
+
+def _extract_wall_segments(grid, cols, rows):
+    """Return merged wall-edge segments that face walkable cells.
+
+    Raycasting/shadow rendering only needs the visible edges of wall runs.
+    Merging adjacent collinear tile edges keeps the segment list much smaller
+    than processing every side of every wall tile individually.
+    """
+    tile_size = settings.TILE_SIZE
+    segments = []
+
+    def is_wall(x, y):
+        if x < 0 or x >= cols or y < 0 or y >= rows:
+            return True
+        return grid[y][x] == WALL_CELL
+
+    for y in range(rows):
+        run_start = None
+        for x in range(cols + 1):
+            faces_open = x < cols and is_wall(x, y) and not is_wall(x, y - 1)
+            if faces_open and run_start is None:
+                run_start = x
+            elif not faces_open and run_start is not None:
+                segments.append((run_start * tile_size, y * tile_size, x * tile_size, y * tile_size))
+                run_start = None
+
+        run_start = None
+        for x in range(cols + 1):
+            faces_open = x < cols and is_wall(x, y) and not is_wall(x, y + 1)
+            if faces_open and run_start is None:
+                run_start = x
+            elif not faces_open and run_start is not None:
+                segments.append((run_start * tile_size, (y + 1) * tile_size, x * tile_size, (y + 1) * tile_size))
+                run_start = None
+
+    for x in range(cols):
+        run_start = None
+        for y in range(rows + 1):
+            faces_open = y < rows and is_wall(x, y) and not is_wall(x - 1, y)
+            if faces_open and run_start is None:
+                run_start = y
+            elif not faces_open and run_start is not None:
+                segments.append((x * tile_size, run_start * tile_size, x * tile_size, y * tile_size))
+                run_start = None
+
+        run_start = None
+        for y in range(rows + 1):
+            faces_open = y < rows and is_wall(x, y) and not is_wall(x + 1, y)
+            if faces_open and run_start is None:
+                run_start = y
+            elif not faces_open and run_start is not None:
+                segments.append(((x + 1) * tile_size, run_start * tile_size, (x + 1) * tile_size, y * tile_size))
+                run_start = None
+
+    return segments
 
 def _weighted_room_type():
     names = [n for n in settings.ROOM_TYPES if settings.ROOM_TYPES[n]["weight"] > 0]
@@ -34,7 +91,7 @@ def _weighted_room_type():
     return random.choices(names, weights=weights, k=1)[0]
 
 def generate_backrooms_level(level_id, player=None):
-    global walls, floors, hazard_tiles, exit_tiles, spawn_x, spawn_y, map_width, map_height, room_type_grid
+    global walls, floors, hazard_tiles, exit_tiles, wall_segments, spawn_x, spawn_y, map_width, map_height, room_type_grid
 
     cols = BASE_COLS + (level_id * LEVEL_SIZE_GROWTH)
     rows = BASE_ROWS + (level_id * LEVEL_SIZE_GROWTH)
@@ -42,6 +99,7 @@ def generate_backrooms_level(level_id, player=None):
     map_height = rows * settings.TILE_SIZE
 
     walls, floors, hazard_tiles, exit_tiles = [], [], [], []
+    wall_segments = []
 
     palette = LEVEL_PALETTES[level_id % len(LEVEL_PALETTES)]
     settings.TILE_COLORS["wall"] = palette["wall"]
@@ -132,6 +190,8 @@ def generate_backrooms_level(level_id, player=None):
                 density = settings.ROOM_TYPES.get(rtype, {}).get("hazard_density", DEFAULT_HAZARD_DENSITY)
                 if (x, y) != (scx, scy) and random.random() < density: hazard_tiles.append(rect)
                 else: floors.append(rect)
+
+    wall_segments = _extract_wall_segments(grid, cols, rows)
 
     if player:
         player.x, player.y = spawn_x, spawn_y
