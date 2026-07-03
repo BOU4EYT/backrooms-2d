@@ -38,12 +38,12 @@ TILE_COLORS = {
 }
 
 ROOM_TYPES = {
-    "office_bay": {"weight": 35, "min_size": (5, 5), "max_size": (10, 8), "hazard_density": 0.02, "wall_tint": (190, 175, 100), "floor_tint": (225, 210, 140)},
-    "pillar_hall": {"weight": 15, "min_size": (8, 8), "max_size": (14, 10), "hazard_density": 0.01, "wall_tint": (185, 170, 110), "floor_tint": (215, 200, 140)},
-    "moist_room": {"weight": 20, "min_size": (4, 4), "max_size": (7, 7), "hazard_density": 0.18, "wall_tint": (60, 70, 40), "floor_tint": (90, 100, 60)},
-    "cramped_storage": {"weight": 20, "min_size": (3, 3), "max_size": (5, 5), "hazard_density": 0.05, "wall_tint": (80, 70, 55), "floor_tint": (130, 115, 90)},
-    "flooded_sublevel": {"weight": 10, "min_size": (6, 6), "max_size": (10, 9), "hazard_density": 0.30, "wall_tint": (30, 40, 55), "floor_tint": (50, 65, 80)},
-    "corridor": {"weight": 0, "min_size": (1, 1), "max_size": (1, 1), "hazard_density": 0.02, "wall_tint": (150, 140, 120), "floor_tint": (180, 170, 150)},
+    "office_bay": {"weight": 35, "min_size": (5, 5), "max_size": (10, 8), "hazard_density": 0.02, "wall_tint": (190, 175, 100), "floor_tint": (225, 210, 140), "light_weights": (90, 5, 5)},
+    "pillar_hall": {"weight": 15, "min_size": (8, 8), "max_size": (14, 10), "hazard_density": 0.01, "wall_tint": (185, 170, 110), "floor_tint": (215, 200, 140), "light_weights": (80, 15, 5)},
+    "moist_room": {"weight": 20, "min_size": (4, 4), "max_size": (7, 7), "hazard_density": 0.18, "wall_tint": (60, 70, 40), "floor_tint": (90, 100, 60), "light_weights": (55, 35, 10)},
+    "cramped_storage": {"weight": 20, "min_size": (3, 3), "max_size": (5, 5), "hazard_density": 0.05, "wall_tint": (80, 70, 55), "floor_tint": (130, 115, 90), "light_weights": (60, 30, 10)},
+    "flooded_sublevel": {"weight": 10, "min_size": (6, 6), "max_size": (10, 9), "hazard_density": 0.30, "wall_tint": (30, 40, 55), "floor_tint": (50, 65, 80), "light_weights": (45, 35, 20)},
+    "corridor": {"weight": 0, "min_size": (1, 1), "max_size": (1, 1), "hazard_density": 0.02, "wall_tint": (150, 140, 120), "floor_tint": (180, 170, 150), "light_weights": (65, 25, 10)},
 }
 
 

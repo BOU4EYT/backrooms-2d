@@ -26,8 +26,28 @@ EXIT_CELL = 3
 map_width, map_height = 0, 0
 walls, floors, hazard_tiles, exit_tiles = [], [], [], []
 wall_segments = []
+room_lights = []
 spawn_x, spawn_y = 100, 100
 room_type_grid = []
+
+ROOM_LIGHT_MIN_RADIUS = 90
+ROOM_LIGHT_RADIUS_PADDING = 20
+ROOM_LIGHT_SIZE_FACTOR = 0.75
+LIGHT_FLICKER_ON_RANGE = (0.08, 0.35)   # quick buzzy flashes while "on"
+LIGHT_FLICKER_OFF_RANGE = (0.05, 0.7)   # brief dropouts while "off"
+
+
+def update_room_lights(dt):
+    """Tick each flickering light's independent on/off timer. Normal lights stay lit,
+    dead lights stay dark -- only 'flicker' state lights are touched here."""
+    for light in room_lights:
+        if light["state"] != "flicker":
+            continue
+        light["flicker_timer"] -= dt
+        if light["flicker_timer"] <= 0:
+            light["lit"] = not light["lit"]
+            lo, hi = LIGHT_FLICKER_ON_RANGE if light["lit"] else LIGHT_FLICKER_OFF_RANGE
+            light["flicker_timer"] = random.uniform(lo, hi)
 
 
 def _extract_wall_segments(grid, cols, rows):
@@ -91,7 +111,7 @@ def _weighted_room_type():
     return random.choices(names, weights=weights, k=1)[0]
 
 def generate_backrooms_level(level_id, player=None):
-    global walls, floors, hazard_tiles, exit_tiles, wall_segments, spawn_x, spawn_y, map_width, map_height, room_type_grid
+    global walls, floors, hazard_tiles, exit_tiles, wall_segments, spawn_x, spawn_y, map_width, map_height, room_type_grid, room_lights
 
     cols = BASE_COLS + (level_id * LEVEL_SIZE_GROWTH)
     rows = BASE_ROWS + (level_id * LEVEL_SIZE_GROWTH)
@@ -100,6 +120,7 @@ def generate_backrooms_level(level_id, player=None):
 
     walls, floors, hazard_tiles, exit_tiles = [], [], [], []
     wall_segments = []
+    room_lights = []
 
     palette = LEVEL_PALETTES[level_id % len(LEVEL_PALETTES)]
     settings.TILE_COLORS["wall"] = palette["wall"]
@@ -143,6 +164,21 @@ def generate_backrooms_level(level_id, player=None):
 
     scx, scy = rooms[0]["center"]
     spawn_x, spawn_y = scx * settings.TILE_SIZE, scy * settings.TILE_SIZE
+
+    for r in rooms:
+        rx, ry, rw, rh = r["rect"]
+        weights = settings.ROOM_TYPES.get(r["type"], {}).get("light_weights", (70, 25, 5))
+        state = random.choices(["normal", "flicker", "dark"], weights=weights, k=1)[0]
+        radius = max(ROOM_LIGHT_MIN_RADIUS, int(max(rw, rh) * settings.TILE_SIZE * ROOM_LIGHT_SIZE_FACTOR) + ROOM_LIGHT_RADIUS_PADDING)
+        lit = state != "dark"
+        room_lights.append({
+            "x": (rx + rw / 2) * settings.TILE_SIZE,
+            "y": (ry + rh / 2) * settings.TILE_SIZE,
+            "radius": radius,
+            "state": state,
+            "lit": lit,
+            "flicker_timer": random.uniform(*LIGHT_FLICKER_ON_RANGE) if state == "flicker" else 0.0,
+        })
 
     def carve_corridor(p1, p2):
         (x1, y1), (x2, y2) = p1, p2
