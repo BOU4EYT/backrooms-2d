@@ -91,4 +91,3 @@ def start_ambient_buzz():
 
 
 load_all_assets()
-start_ambient_buzz()

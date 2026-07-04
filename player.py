@@ -5,18 +5,17 @@ import settings
 
 PLAYER_SIZE = 40
 MAX_STAT = 100
-BASE_SPEED = 2.5
-SPRINT_SPEED = 5.0
+BASE_SPEED = 150.0  # Converted to pixels-per-second instead of per-frame
+SPRINT_SPEED = 300.0
 HOTBAR_SLOTS = 5
 VIEW_RADIUS = 240
-FIXED_FRAME_TIME = 1 / 60
-STAMINA_SPRINT_DRAIN = 0.7
-STAMINA_RECOVERY = 0.3
-FLASHLIGHT_DEBOUNCE_FRAMES = 15
-HAZARD_HEALTH_DAMAGE = 0.4
-HAZARD_SANITY_DAMAGE = 0.2
-SANITY_DRAIN_FLASHLIGHT_ON = 0.02
-SANITY_DRAIN_FLASHLIGHT_OFF_BONUS = 0.08
+STAMINA_SPRINT_DRAIN = 42.0  # Scaled for delta-time
+STAMINA_RECOVERY = 18.0
+FLASHLIGHT_DEBOUNCE_TIME = 0.25  # Debounce tracked via real seconds instead of frame ticks
+HAZARD_HEALTH_DAMAGE = 24.0
+HAZARD_SANITY_DAMAGE = 12.0
+SANITY_DRAIN_FLASHLIGHT_ON = 1.2
+SANITY_DRAIN_FLASHLIGHT_OFF_BONUS = 4.8
 DIRECTION_SMOOTHING = 0.1
 DIRECTION_THRESHOLD = 0.5
 SHIVER_SANITY_THRESHOLD = 30
@@ -56,7 +55,7 @@ class Player:
         self.smooth_dir_x, self.smooth_dir_y = 0.0, 1.0
 
         self.flashlight_on = True
-        self.flashlight_debounce = 0
+        self.flashlight_debounce = 0.0
 
         self.sprite_w, self.sprite_h = SPRITE_SIZE, SPRITE_SIZE
         self.anim_frame = 0
@@ -69,37 +68,38 @@ class Player:
         self.walk_step_interval = WALK_STEP_INTERVAL
         self.sprint_step_interval = SPRINT_STEP_INTERVAL
 
-    def handle_input(self, walls_list, map_width, map_height):
+    def handle_input(self, dt, walls_list, map_width, map_height):
         self.is_moving = False
         dx, dy = 0, 0
         is_moving_keys = gl.key("a") or gl.key("d") or gl.key("w") or gl.key("s")
 
         if gl.key("shift") and self.stamina > 0 and is_moving_keys:
             self.current_speed = self.sprint_speed
-            self.stamina = max(0, self.stamina - STAMINA_SPRINT_DRAIN)
+            self.stamina = max(0, self.stamina - STAMINA_SPRINT_DRAIN * dt)
         else:
             self.current_speed = self.base_speed
             if not gl.key("shift") or not is_moving_keys:
-                self.stamina = min(self.max_stamina, self.stamina + STAMINA_RECOVERY)
+                self.stamina = min(self.max_stamina, self.stamina + STAMINA_RECOVERY * dt)
 
-        if gl.key("a"): dx -= self.current_speed; self.dir_x, self.dir_y = -1, 0; self.is_moving = True
-        if gl.key("d"): dx += self.current_speed; self.dir_x, self.dir_y = 1, 0; self.is_moving = True
-        if gl.key("w"): dy -= self.current_speed; self.dir_x, self.dir_y = 0, -1; self.is_moving = True
-        if gl.key("s"): dy += self.current_speed; self.dir_x, self.dir_y = 0, 1; self.is_moving = True
+        if gl.key("a"): dx -= self.current_speed * dt; self.dir_x, self.dir_y = -1, 0; self.is_moving = True
+        if gl.key("d"): dx += self.current_speed * dt; self.dir_x, self.dir_y = 1, 0; self.is_moving = True
+        if gl.key("w"): dy -= self.current_speed * dt; self.dir_x, self.dir_y = 0, -1; self.is_moving = True
+        if gl.key("s"): dy += self.current_speed * dt; self.dir_x, self.dir_y = 0, 1; self.is_moving = True
 
         if self.is_moving and "player_walk" in settings.SOUNDS:
             current_interval = self.sprint_step_interval if self.current_speed > self.base_speed else self.walk_step_interval
-            self.footstep_timer += FIXED_FRAME_TIME
+            self.footstep_timer += dt
             if self.footstep_timer >= current_interval:
                 pg.mixer.Channel(1).play(settings.SOUNDS["player_walk"])
                 self.footstep_timer = 0.0
         else:
             self.footstep_timer = self.walk_step_interval
 
-        if self.flashlight_debounce > 0: self.flashlight_debounce -= 1
-        if gl.key("f") and self.flashlight_debounce == 0:
+        if self.flashlight_debounce > 0: 
+            self.flashlight_debounce -= dt
+        if gl.key("f") and self.flashlight_debounce <= 0:
             self.flashlight_on = not self.flashlight_on
-            self.flashlight_debounce = FLASHLIGHT_DEBOUNCE_FRAMES
+            self.flashlight_debounce = FLASHLIGHT_DEBOUNCE_TIME
 
         future_rect_x = (self.x + dx, self.y, self.size, self.size)
         if not self.check_wall_collisions(future_rect_x, walls_list):
@@ -110,7 +110,8 @@ class Player:
             self.y = max(0, min(self.y + dy, map_height - self.size))
 
         for i in range(self.hotbar_slots):
-            if gl.key(str(i+1)): self.selected_slot = i
+            if gl.key(str(i+1)): 
+                self.selected_slot = i
 
     def check_wall_collisions(self, future_rect, walls_list):
         future = pg.Rect(future_rect)
@@ -119,13 +120,13 @@ class Player:
                 return True
         return False
 
-    def check_environmental_interactions(self, hazard_tiles, exit_tiles):
+    def check_environmental_interactions(self, dt, hazard_tiles, exit_tiles):
         player_rect = (self.x, self.y, self.size, self.size)
 
         for haz in hazard_tiles:
             if pg.Rect(player_rect).colliderect(pg.Rect(haz)):
-                self.health = max(0, self.health - HAZARD_HEALTH_DAMAGE)
-                self.sanity = max(0, self.sanity - HAZARD_SANITY_DAMAGE)
+                self.health = max(0, self.health - HAZARD_HEALTH_DAMAGE * dt)
+                self.sanity = max(0, self.sanity - HAZARD_SANITY_DAMAGE * dt)
                 if "hurt" in settings.SOUNDS and not pg.mixer.Channel(0).get_busy():
                     settings.SOUNDS["hurt"].play()
                 break
@@ -137,20 +138,23 @@ class Player:
                 break
 
         if touching_exit and not self.on_exit:
-            if "exit_door" in settings.SOUNDS: settings.SOUNDS["exit_door"].play()
+            if "exit_door" in settings.SOUNDS: 
+                settings.SOUNDS["exit_door"].play()
             self.on_exit = True
             return True
 
-        if not touching_exit: self.on_exit = False
+        if not touching_exit: 
+            self.on_exit = False
         return False
 
-    def update(self, walls_list, hazard_tiles, exit_tiles, map_width, map_height):
-        self.handle_input(walls_list, map_width, map_height)
-        hit_exit = self.check_environmental_interactions(hazard_tiles, exit_tiles)
+    def update(self, dt, walls_list, hazard_tiles, exit_tiles, map_width, map_height):
+        self.handle_input(dt, walls_list, map_width, map_height)
+        hit_exit = self.check_environmental_interactions(dt, hazard_tiles, exit_tiles)
 
         drain_rate = SANITY_DRAIN_FLASHLIGHT_ON
-        if not self.flashlight_on: drain_rate += SANITY_DRAIN_FLASHLIGHT_OFF_BONUS
-        self.sanity = max(0, self.sanity - drain_rate)
+        if not self.flashlight_on: 
+            drain_rate += SANITY_DRAIN_FLASHLIGHT_OFF_BONUS
+        self.sanity = max(0, self.sanity - drain_rate * dt)
 
         turn_speed = DIRECTION_SMOOTHING
         self.smooth_dir_x += (self.dir_x - self.smooth_dir_x) * turn_speed
@@ -158,7 +162,7 @@ class Player:
 
         if self.is_moving:
             anim_speed = SPRINT_ANIM_INTERVAL if self.current_speed > self.base_speed else self.anim_speed
-            self.anim_timer += FIXED_FRAME_TIME
+            self.anim_timer += dt
             if self.anim_timer >= anim_speed:
                 self.anim_timer = 0
                 self.anim_frame += 1
@@ -175,9 +179,12 @@ class Player:
 
         if "player_sheet" in settings.TEXTURES:
             row = SPRITE_ROW_DOWN
-            if self.smooth_dir_y < -DIRECTION_THRESHOLD: row = SPRITE_ROW_UP
-            elif self.smooth_dir_x < -DIRECTION_THRESHOLD: row = SPRITE_ROW_LEFT
-            elif self.smooth_dir_x > DIRECTION_THRESHOLD: row = SPRITE_ROW_RIGHT
+            if self.smooth_dir_y < -DIRECTION_THRESHOLD: 
+                row = SPRITE_ROW_UP
+            elif self.smooth_dir_x < -DIRECTION_THRESHOLD: 
+                row = SPRITE_ROW_LEFT
+            elif self.smooth_dir_x > DIRECTION_THRESHOLD: 
+                row = SPRITE_ROW_RIGHT
 
             col = self.anim_frame % SPRITE_ANIM_FRAMES if self.is_moving else 0
             sheet_rect = pg.Rect(col * self.sprite_w, row * self.sprite_h, self.sprite_w, self.sprite_h)

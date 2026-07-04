@@ -12,7 +12,7 @@ SCREEN_WIDTH = 1280
 SCREEN_HEIGHT = 720
 MAX_FADE_ALPHA = 255
 FADE_SPEED = 8
-DARKNESS_COLOR = (10, 10, 12, MAX_FADE_ALPHA)
+DARKNESS_COLOR = (255, 255, 255)  # Removed alpha channel from base color to avoid transparency leaks
 FLASHLIGHT_FLICKER_SANITY_THRESHOLD = 40
 FLASHLIGHT_CONE_WIDTH = 220
 FLASHLIGHT_SOFTNESS_STEPS = 48
@@ -20,13 +20,22 @@ FLASHLIGHT_JITTER_LENGTH = 3
 FLASHLIGHT_JITTER_WIDTH = 2
 FLASHLIGHT_FALLOFF_POWER = 0.8
 FLASHLIGHT_ALPHA_MULT = 35
+FLASHLIGHT_CONE_LENGTH_SCALE = 0.6
+FLASHLIGHT_CONE_LENGTH_VARIANCE = 0.4
+FLASHLIGHT_BASE_WIDTH_SCALE = 0.15
 PLAYER_AURA_MULTIPLIER = 1.5
 PLAYER_AURA_STEP = 4
-SHADOW_EXTENSION = 2000.0
+SHADOW_EXTENSION = 1500
 SHADOW_CULL_PADDING = 100
 AMBIENT_LIGHT_PEAK_ALPHA = 220
 AMBIENT_LIGHT_STEP = 6
 AMBIENT_LIGHT_REVEAL_MARGIN = 150
+WALL_SHADOW_BRIGHTNESS_FLOOR = 0.15
+WALL_SHADOW_DARKENING_ALPHA = 150
+WALL_TINT_BRIGHTNESS_SCALE = 1
+WALL_TINT_MIN_CHANNEL = 1
+WALL_ADJACENT_OFFSETS = ((1, 0), (-1, 0), (0, 1), (0, -1))
+SHADOW_SAMPLING = 1
 
 cam_x, cam_y = 0, 0
 current_level_index = 0
@@ -47,8 +56,43 @@ generator.generate_backrooms_level(0)
 player = Player(generator.spawn_x, generator.spawn_y)
 
 
+def start_game():
+    """Initialize the game state before the main loop begins."""
+    global current_level_index, fade_alpha, fade_state, pending_level_id, player
+
+    if not pg.mixer.get_init():
+        pg.mixer.init()
+
+    current_level_index = 0
+    fade_alpha = 0
+    fade_state = "idle"
+    pending_level_id = None
+    settings.start_ambient_buzz()
+    generator.generate_backrooms_level(0)
+    player = Player(generator.spawn_x, generator.spawn_y)
+
+    # The game loop itself only starts here, once state (including ambient
+    # audio) is fully set up. Previously gl.run() lived at module scope,
+    # meaning the first Start Game click ran the loop using the module's
+    # initial pre-start_game() state (no ambient audio), and only after
+    # quitting did start_game() actually execute and reset things - with
+    # no loop left to render/update (frozen window), and no way to run()
+    # again on later Start Game clicks since "main" was already imported.
+    gl.run()
+
+
 def clamp(value, minimum, maximum):
     return max(minimum, min(value, maximum))
+
+
+def apply_shadow_blur(surface, blur_radius=1):
+    """Apply a simple blur to soften shadow edges by downscaling and upscaling."""
+    w, h = surface.get_size()
+    scale_factor = blur_radius + SHADOW_SAMPLING
+    small_w = max(1, w // scale_factor)
+    small_h = max(1, h // scale_factor)
+    small = pg.transform.smoothscale(surface, (small_w, small_h))
+    return pg.transform.scale(small, (w, h))
 
 
 @gl.on_update
@@ -58,7 +102,9 @@ def update(dt):
     if gl.key("escape"):
         gl.quit()
 
+    # FIX: Added 'dt' back as the first argument here
     hit_exit = player.update(
+        dt,
         generator.walls,
         generator.hazard_tiles,
         generator.exit_tiles,
@@ -66,6 +112,7 @@ def update(dt):
         generator.map_height,
     )
     generator.update_room_lights(dt)
+    
     if hit_exit and fade_state == "idle":
         current_level_index += 1
         start_level_transition(current_level_index)
@@ -114,14 +161,69 @@ def draw():
         else:
             gl.draw.rect(ex[0] - cam_x, ex[1] - cam_y, ex[2], ex[3], settings.TILE_COLORS["exit"])
 
-    for wall in generator.walls:
-        if "wall" in settings.TEXTURES:
-            surface.blit(settings.TEXTURES["wall"], (wall[0] - cam_x, wall[1] - cam_y))
-        else:
-            gl.draw.rect(wall[0] - cam_x, wall[1] - cam_y, wall[2], wall[3], room_tint_for(wall[0], wall[1], "wall"))
-
     player.draw(cam_x, cam_y)
-    draw_fog_of_war(surface)
+    light_map = draw_fog_of_war(surface)
+
+    # Draw exposed wall tiles after the fog pass, using the light map to soften shadows
+    # instead of letting them flatten walls into pure black.
+    wall_positions = {(int(wall[0] // settings.TILE_SIZE), int(wall[1] // settings.TILE_SIZE)) for wall in generator.walls}
+    for wall in generator.walls:
+        tx, ty = int(wall[0] // settings.TILE_SIZE), int(wall[1] // settings.TILE_SIZE)
+        is_exposed = False
+        for dx, dy in WALL_ADJACENT_OFFSETS:
+            if (tx + dx, ty + dy) not in wall_positions:
+                is_exposed = True
+                break
+        if not is_exposed:
+            continue
+
+        wall_x = wall[0] - cam_x
+        wall_y = wall[1] - cam_y
+        
+        # Check if this wall is on the perimeter of the wall cluster
+        edge_count = 0
+        for dx, dy in WALL_ADJACENT_OFFSETS:
+            if (tx + dx, ty + dy) not in wall_positions:
+                edge_count += 1
+        
+        # Sample multiple points on the wall to avoid bright edge artifacts
+        sample_points = [
+            (int(wall_x + wall[2] / 3), int(wall_y + wall[3] / 3)),
+            (int(wall_x + 2 * wall[2] / 3), int(wall_y + wall[3] / 3)),
+            (int(wall_x + wall[2] / 3), int(wall_y + 2 * wall[3] / 3)),
+            (int(wall_x + 2 * wall[2] / 3), int(wall_y + 2 * wall[3] / 3)),
+            (int(wall_x + wall[2] / 2), int(wall_y + wall[3] / 2)),
+        ]
+        brightness = 1.0
+        min_brightness = 1.0
+        for sample_x, sample_y in sample_points:
+            # Clamp into the screen instead of discarding out-of-bounds samples.
+            # Previously, edge-row/column wall tiles could have every sample
+            # point land off-screen, leaving min_brightness stuck at its 1.0
+            # default and rendering that tile at full, undarkened brightness -
+            # the bright streaks seen along screen edges.
+            clamped_x = clamp(sample_x, 0, SCREEN_WIDTH - 1)
+            clamped_y = clamp(sample_y, 0, SCREEN_HEIGHT - 1)
+            sample_brightness = light_map.get_at((clamped_x, clamped_y))[0] / 255.0
+            min_brightness = min(min_brightness, sample_brightness)
+        
+        # Apply extra darkening for edge-exposed walls
+        if edge_count > 0:
+            min_brightness *= 0.85
+        
+        brightness = max(WALL_SHADOW_BRIGHTNESS_FLOOR, min_brightness)
+
+        if "wall" in settings.TEXTURES:
+            wall_texture = settings.TEXTURES["wall"].copy()
+            overlay = pg.Surface(wall_texture.get_size(), pg.SRCALPHA)
+            overlay.fill((0, 0, 0, int((1.0 - brightness) * WALL_SHADOW_DARKENING_ALPHA)))
+            wall_texture.blit(overlay, (0, 0))
+            surface.blit(wall_texture, (wall_x, wall_y))
+        else:
+            base_color = room_tint_for(wall[0], wall[1], "wall")
+            tint = tuple(max(WALL_TINT_MIN_CHANNEL, int(channel * brightness * WALL_TINT_BRIGHTNESS_SCALE)) for channel in base_color)
+            gl.draw.rect(wall_x, wall_y, wall[2], wall[3], tint)
+
     player.draw_hud(current_level_index)
 
     if fade_alpha > 0:
@@ -131,36 +233,36 @@ def draw():
 
 
 def draw_fog_of_war(surface):
-    """Render player visibility, flashlight falloff, and wall-cast shadows."""
-    darkness = pg.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pg.SRCALPHA)
-    darkness.fill(DARKNESS_COLOR)
-
+    """Render player visibility, flashlight falloff, and wall-cast shadows by multiplying
+    the rendered scene against a lightmap. Multiplying (rather than subtracting a flat
+    darkness amount) keeps each color channel dimming proportionally, so textures keep
+    their color balance instead of the low channels (e.g. blue) clipping to 0 first."""
     p_center_x = player.x + player.size / 2
     p_center_y = player.y + player.size / 2
     scr_px = int(p_center_x - cam_x)
     scr_py = int(p_center_y - cam_y)
 
-    visibility = pg.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pg.SRCALPHA)
-    visibility.fill((0, 0, 0, 0))
+    # Light map layer. This tracks where light is allowed to shine.
+    light_map = pg.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+    light_map.fill((0, 0, 0))  # Start completely unlit
 
     player_base_rad = int(player.size * PLAYER_AURA_MULTIPLIER)
 
     def merge_source(draw_fn):
-        """Draw one light source on its own scratch layer, then merge it into `visibility`
-        by taking the MAX alpha per-pixel rather than normal alpha compositing. Normal
-        compositing of two overlapping partial-alpha shapes can produce a result *darker*
-        than either shape alone -- that's what caused the seam/bite where lights met.
-        MAX blending means overlapping lights always take the brighter contribution."""
-        scratch = pg.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pg.SRCALPHA)
-        scratch.fill((0, 0, 0, 0))
+        """Draw a light source to a temp surface and maximize it onto the light_map."""
+        scratch = pg.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+        scratch.fill((0, 0, 0))
         draw_fn(scratch)
-        visibility.blit(scratch, (0, 0), special_flags=pg.BLEND_RGBA_MAX)
+        light_map.blit(scratch, (0, 0), special_flags=pg.BLEND_RGB_MAX)
 
+    # Add the Flashlight Beam
     if player.flashlight_on and (player.smooth_dir_x != 0 or player.smooth_dir_y != 0):
         merge_source(lambda scratch: draw_flashlight_cone(scratch, scr_px, scr_py, player_base_rad))
 
+    # Add the Player's personal small light aura
     merge_source(lambda scratch: draw_player_aura(scratch, scr_px, scr_py, player_base_rad))
 
+    # Add any active Ambient Room Lights
     for light in generator.room_lights:
         if not light["lit"]:
             continue
@@ -169,75 +271,83 @@ def draw_fog_of_war(surface):
         rad = light["radius"]
         if scr_lx + rad < 0 or scr_lx - rad > SCREEN_WIDTH or scr_ly + rad < 0 or scr_ly - rad > SCREEN_HEIGHT:
             continue
-        # The camera window is much larger than the player's actual sight range, so a lit
-        # room could sit fully inside the camera frame while still being far from the player
-        # -- visible on screen despite never having been explored. Gate by proximity to the
-        # player as well so distant rooms stay dark until you're actually near them.
+
         dist_to_player = math.hypot(scr_lx - scr_px, scr_ly - scr_py)
         if dist_to_player > player.view_radius + rad + AMBIENT_LIGHT_REVEAL_MARGIN:
             continue
         merge_source(lambda scratch, lx=scr_lx, ly=scr_ly, r=rad: draw_single_ambient_light(scratch, lx, ly, r))
 
-    darkness.blit(visibility, (0, 0), special_flags=pg.BLEND_RGBA_SUB)
-    draw_wall_shadows(darkness, p_center_x, p_center_y)
-    surface.blit(darkness, (0, 0))
+    # Cast shadows directly onto the light map by drawing solid black geometry.
+    draw_wall_shadows(light_map, p_center_x, p_center_y)
+    
+    # Blur the light map to soften shadow edges
+    light_map = apply_shadow_blur(light_map, blur_radius=2)
+
+    # Multiply the scene by the light map: lit areas (light_val near 255) stay near their
+    # original color, unlit areas (light_val near 0) go black, and everything in between
+    # dims proportionally across channels instead of clipping.
+    surface.blit(light_map, (0, 0), special_flags=pg.BLEND_RGB_MULT)
+    return light_map
 
 
-def draw_player_aura(visibility, scr_px, scr_py, player_base_rad):
+def draw_player_aura(light_surface, scr_px, scr_py, player_base_rad):
     for radius in range(player_base_rad, 0, -PLAYER_AURA_STEP):
         reveal_ratio = radius / player_base_rad
-        reveal_alpha = int(MAX_FADE_ALPHA * (1.0 - reveal_ratio))
-        pg.draw.circle(visibility, (255, 255, 255, reveal_alpha), (scr_px, scr_py), max(1, radius))
+        val = int(255 * (1.0 - reveal_ratio))
+        pg.draw.circle(light_surface, (val, val, val), (scr_px, scr_py), max(1, radius))
 
 
-def draw_single_ambient_light(visibility, scr_lx, scr_ly, rad):
+def draw_single_ambient_light(light_surface, scr_lx, scr_ly, rad):
     for radius in range(rad, 0, -AMBIENT_LIGHT_STEP):
         reveal_ratio = radius / rad
-        reveal_alpha = int(AMBIENT_LIGHT_PEAK_ALPHA * (1.0 - reveal_ratio))
-        pg.draw.circle(visibility, (255, 255, 255, reveal_alpha), (scr_lx, scr_ly), max(1, radius))
+        val = int(AMBIENT_LIGHT_PEAK_ALPHA * (1.0 - reveal_ratio))
+        pg.draw.circle(light_surface, (val, val, val), (scr_lx, scr_ly), max(1, radius))
 
 
-def draw_flashlight_cone(visibility, scr_px, scr_py, aura_radius):
-    """Paint a soft flashlight cone into the visibility mask."""
+def draw_flashlight_cone(light_surface, scr_px, scr_py, aura_radius):
+    """Paint a soft flashlight cone into the light map."""
     forward_x, forward_y = player.smooth_dir_x, player.smooth_dir_y
     flicker_prob = 0.15 if player.sanity < FLASHLIGHT_FLICKER_SANITY_THRESHOLD else 0.0
     if random.random() <= flicker_prob:
         return
 
-    cone_length = player.view_radius * (0.6 + 0.4 * (player.sanity / player.max_sanity))
+    cone_length = player.view_radius * (
+        FLASHLIGHT_CONE_LENGTH_SCALE + FLASHLIGHT_CONE_LENGTH_VARIANCE * (player.sanity / player.max_sanity)
+    )
     perp_x, perp_y = -forward_y, forward_x
     mag = math.hypot(perp_x, perp_y) or 1
     perp_x /= mag
     perp_y /= mag
 
-    # Roll jitter once per frame (not per softness step) so every layer of the cone shifts
-    # together as one flickering beam, instead of each layer jittering independently and
-    # creating a corrugated/ribbed edge where the misaligned layers stack.
     frame_length_jitter = random.randint(-FLASHLIGHT_JITTER_LENGTH, FLASHLIGHT_JITTER_LENGTH)
     frame_width_jitter = random.randint(-FLASHLIGHT_JITTER_WIDTH, FLASHLIGHT_JITTER_WIDTH)
 
-    for step in reversed(range(1, FLASHLIGHT_SOFTNESS_STEPS + 1)):
-        ratio = step / FLASHLIGHT_SOFTNESS_STEPS
-        jitter_scale = ratio  # keep jitter subtle near the player, fuller at the tip
+    # Loop from the largest outer cone down to the smallest inner core, 
+    # painting increasingly brighter solid values toward the center.
+    softness_steps = int(FLASHLIGHT_SOFTNESS_STEPS)
+    for step in reversed(range(1, softness_steps + 1)):
+        ratio = step / softness_steps
+        jitter_scale = ratio
         current_length = cone_length * ratio + frame_length_jitter * jitter_scale
         half_width = (FLASHLIGHT_CONE_WIDTH / 2) * ratio + frame_width_jitter * jitter_scale
-        # Base width tracks the aura circle's radius (not a fraction of the tip width) so the
-        # cone flares out of the aura smoothly instead of pinching to a point at the seam.
-        base_half_width = max(half_width * 0.15, aura_radius * ratio)
-        # Eased falloff (steeper near the tip, gentler near the player) avoids visible banding.
-        reveal_alpha = int(MAX_FADE_ALPHA * (1.0 - ratio) ** FLASHLIGHT_FALLOFF_POWER / FLASHLIGHT_SOFTNESS_STEPS * FLASHLIGHT_ALPHA_MULT)
-        reveal_alpha = min(MAX_FADE_ALPHA, reveal_alpha)
+        base_half_width = max(half_width * FLASHLIGHT_BASE_WIDTH_SCALE, aura_radius * ratio)
+        
+        # FIX: Removed the layer division so intensity scales cleanly up to 255
+        reveal_val = int(255 * (1.0 - ratio) ** FLASHLIGHT_FALLOFF_POWER)
+        reveal_val = clamp(reveal_val, 0, 255)
 
         tip = (scr_px, scr_py)
         base_left = (int(scr_px + perp_x * base_half_width), int(scr_py + perp_y * base_half_width))
         base_right = (int(scr_px - perp_x * base_half_width), int(scr_py - perp_y * base_half_width))
         end_left = (int(scr_px + forward_x * current_length + perp_x * half_width), int(scr_py + forward_y * current_length + perp_y * half_width))
         end_right = (int(scr_px + forward_x * current_length - perp_x * half_width), int(scr_py + forward_y * current_length - perp_y * half_width))
-        pg.draw.polygon(visibility, (255, 255, 255, reveal_alpha), [tip, base_left, end_left, end_right, base_right])
+        
+        pg.draw.polygon(light_surface, (reveal_val, reveal_val, reveal_val), [tip, base_left, end_left, end_right, base_right])
 
 
-def draw_wall_shadows(darkness, p_center_x, p_center_y):
-    """Re-occlude light that would otherwise leak through merged wall edges."""
+def draw_wall_shadows(light_surface, p_center_x, p_center_y):
+    """Carve shadow geometry out of the light map by drawing solid black polygons that extend
+    outward from each wall face, sealing corners so light can't leak between segments."""
     for x1, y1, x2, y2 in generator.wall_segments:
         mid_x = (x1 + x2) / 2
         mid_y = (y1 + y2) / 2
@@ -250,18 +360,13 @@ def draw_wall_shadows(darkness, p_center_x, p_center_y):
         d2x, d2y = x2 - p_center_x, y2 - p_center_y
         mag1 = math.hypot(d1x, d1y) or 1
         mag2 = math.hypot(d2x, d2y) or 1
-        # Push the shadow's near edge one tile further along the light direction so it starts
-        # at the *back* of the wall, not its lit front face -- otherwise the wall's own body
-        # gets re-darkened the instant light hits it.
-        near_x1 = s_x1 + (d1x / mag1) * settings.TILE_SIZE
-        near_y1 = s_y1 + (d1y / mag1) * settings.TILE_SIZE
-        near_x2 = s_x2 + (d2x / mag2) * settings.TILE_SIZE
-        near_y2 = s_y2 + (d2y / mag2) * settings.TILE_SIZE
+
+        # Closed the wall geometry gap. Shadow bounds now anchor perfectly along 
+        # tile segment faces to seal corners completely.
         p1x = s_x1 + (d1x / mag1) * SHADOW_EXTENSION
         p1y = s_y1 + (d1y / mag1) * SHADOW_EXTENSION
         p2x = s_x2 + (d2x / mag2) * SHADOW_EXTENSION
         p2y = s_y2 + (d2y / mag2) * SHADOW_EXTENSION
-        pg.draw.polygon(darkness, DARKNESS_COLOR, [(near_x1, near_y1), (near_x2, near_y2), (p2x, p2y), (p1x, p1y)])
-
-
-gl.run()
+        
+        # Draw pure black onto the light map layer to completely negate light in shadow zones
+        pg.draw.polygon(light_surface, (0, 0, 0), [(s_x1, s_y1), (s_x2, s_y2), (p2x, p2y), (p1x, p1y)])

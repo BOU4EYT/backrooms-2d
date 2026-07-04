@@ -14,6 +14,7 @@ DEFAULT_SPAWN_TILE = (2, 2)
 DEFAULT_ROOM_SIZE = (6, 6)
 DEFAULT_ROOM_TYPE = "office_bay"
 DEFAULT_HAZARD_DENSITY = 0.03
+
 LEVEL_PALETTES = [
     {"wall": (190, 175, 100), "floor": (225, 210, 140)},
     {"wall": (70, 75, 80), "floor": (110, 115, 120)},
@@ -33,13 +34,12 @@ room_type_grid = []
 ROOM_LIGHT_MIN_RADIUS = 90
 ROOM_LIGHT_RADIUS_PADDING = 20
 ROOM_LIGHT_SIZE_FACTOR = 0.75
-LIGHT_FLICKER_ON_RANGE = (0.08, 0.35)   # quick buzzy flashes while "on"
-LIGHT_FLICKER_OFF_RANGE = (0.05, 0.7)   # brief dropouts while "off"
+LIGHT_FLICKER_ON_RANGE = (0.08, 0.35)   
+LIGHT_FLICKER_OFF_RANGE = (0.05, 0.7)   
 
 
 def update_room_lights(dt):
-    """Tick each flickering light's independent on/off timer. Normal lights stay lit,
-    dead lights stay dark -- only 'flicker' state lights are touched here."""
+    """Tick each flickering light's independent on/off timer."""
     for light in room_lights:
         if light["state"] != "flicker":
             continue
@@ -51,12 +51,7 @@ def update_room_lights(dt):
 
 
 def _extract_wall_segments(grid, cols, rows):
-    """Return merged wall-edge segments that face walkable cells.
-
-    Raycasting/shadow rendering only needs the visible edges of wall runs.
-    Merging adjacent collinear tile edges keeps the segment list much smaller
-    than processing every side of every wall tile individually.
-    """
+    """Return merged wall-edge segments facing walkable cells to minimize shadow passes."""
     tile_size = settings.TILE_SIZE
     segments = []
 
@@ -65,6 +60,7 @@ def _extract_wall_segments(grid, cols, rows):
             return True
         return grid[y][x] == WALL_CELL
 
+    # Horizontal runs (North faces)
     for y in range(rows):
         run_start = None
         for x in range(cols + 1):
@@ -75,6 +71,7 @@ def _extract_wall_segments(grid, cols, rows):
                 segments.append((run_start * tile_size, y * tile_size, x * tile_size, y * tile_size))
                 run_start = None
 
+        # South faces
         run_start = None
         for x in range(cols + 1):
             faces_open = x < cols and is_wall(x, y) and not is_wall(x, y + 1)
@@ -84,6 +81,7 @@ def _extract_wall_segments(grid, cols, rows):
                 segments.append((run_start * tile_size, (y + 1) * tile_size, x * tile_size, (y + 1) * tile_size))
                 run_start = None
 
+    # Vertical runs (West faces)
     for x in range(cols):
         run_start = None
         for y in range(rows + 1):
@@ -94,6 +92,7 @@ def _extract_wall_segments(grid, cols, rows):
                 segments.append((x * tile_size, run_start * tile_size, x * tile_size, y * tile_size))
                 run_start = None
 
+        # East faces
         run_start = None
         for y in range(rows + 1):
             faces_open = y < rows and is_wall(x, y) and not is_wall(x + 1, y)
@@ -105,10 +104,12 @@ def _extract_wall_segments(grid, cols, rows):
 
     return segments
 
+
 def _weighted_room_type():
     names = [n for n in settings.ROOM_TYPES if settings.ROOM_TYPES[n]["weight"] > 0]
     weights = [settings.ROOM_TYPES[n]["weight"] for n in names]
     return random.choices(names, weights=weights, k=1)[0]
+
 
 def generate_backrooms_level(level_id, player=None):
     global walls, floors, hazard_tiles, exit_tiles, wall_segments, spawn_x, spawn_y, map_width, map_height, room_type_grid, room_lights
@@ -119,8 +120,7 @@ def generate_backrooms_level(level_id, player=None):
     map_height = rows * settings.TILE_SIZE
 
     walls, floors, hazard_tiles, exit_tiles = [], [], [], []
-    wall_segments = []
-    room_lights = []
+    wall_segments, room_lights = [], []
 
     palette = LEVEL_PALETTES[level_id % len(LEVEL_PALETTES)]
     settings.TILE_COLORS["wall"] = palette["wall"]
@@ -137,8 +137,11 @@ def generate_backrooms_level(level_id, player=None):
         attempts += 1
         rtype = _weighted_room_type()
         spec = settings.ROOM_TYPES[rtype]
-        rw, rh = random.randint(spec["min_size"][0], spec["max_size"][0]), random.randint(spec["min_size"][1], spec["max_size"][1])
-        if cols - rw - MIN_ROOM_MARGIN < MIN_ROOM_MARGIN or rows - rh - MIN_ROOM_MARGIN < MIN_ROOM_MARGIN: continue
+        rw = random.randint(spec["min_size"][0], spec["max_size"][0])
+        rh = random.randint(spec["min_size"][1], spec["max_size"][1])
+        
+        if cols - rw - MIN_ROOM_MARGIN < MIN_ROOM_MARGIN or rows - rh - MIN_ROOM_MARGIN < MIN_ROOM_MARGIN: 
+            continue
         rx = random.randint(ROOM_PADDING, cols - rw - MIN_ROOM_MARGIN)
         ry = random.randint(ROOM_PADDING, rows - rh - MIN_ROOM_MARGIN)
 
@@ -146,8 +149,10 @@ def generate_backrooms_level(level_id, player=None):
         for r in rooms:
             ex, ey, ew, eh = r["rect"]
             if not (rx + rw + ROOM_PADDING <= ex or rx >= ex + ew + ROOM_PADDING or ry + rh + ROOM_PADDING <= ey or ry >= ey + eh + ROOM_PADDING):
-                overlaps = True; break
-        if overlaps: continue
+                overlaps = True
+                break
+        if overlaps: 
+            continue
 
         rooms.append({"rect": (rx, ry, rw, rh), "type": rtype, "center": (rx + rw // 2, ry + rh // 2)})
         for yy in range(ry, ry + rh):
@@ -188,7 +193,8 @@ def generate_backrooms_level(level_id, player=None):
         for target, axis in steps:
             while (cx if axis == "x" else cy) != target:
                 grid[cy][cx] = FLOOR_CELL
-                if room_type_grid[cy][cx] is None: room_type_grid[cy][cx] = "corridor"
+                if room_type_grid[cy][cx] is None: 
+                    room_type_grid[cy][cx] = "corridor"
                 cx += (1 if target > cx else -1) if axis == "x" else 0
                 cy += (1 if target > cy else -1) if axis == "y" else 0
         grid[y2][x2] = FLOOR_CELL
@@ -198,17 +204,21 @@ def generate_backrooms_level(level_id, player=None):
         best, best_dist = None, None
         for a in connected:
             for b in remaining:
-                ax, ay = rooms[a]["center"]; bx, by = rooms[b]["center"]
+                ax, ay = rooms[a]["center"]
+                bx, by = rooms[b]["center"]
                 d = abs(ax - bx) + abs(ay - by)
-                if best_dist is None or d < best_dist: best, best_dist = (a, b), d
+                if best_dist is None or d < best_dist: 
+                    best, best_dist = (a, b), d
         a, b = best
         carve_corridor(rooms[a]["center"], rooms[b]["center"])
         connected.add(b)
         remaining.discard(b)
 
-    for _ in range(max(1, len(rooms) // EXTRA_CONNECTION_ROOM_DIVISOR)):
-        a, b = random.sample(range(len(rooms)), 2)
-        carve_corridor(rooms[a]["center"], rooms[b]["center"])
+    # BUGFIX: Prevent crash if layout generator only managed to yield 1 room total
+    if len(rooms) > 1:
+        for _ in range(max(1, len(rooms) // EXTRA_CONNECTION_ROOM_DIVISOR)):
+            a, b = random.sample(range(len(rooms)), 2)
+            carve_corridor(rooms[a]["center"], rooms[b]["center"])
 
     exit_room = max(rooms[1:], key=lambda r: abs(r["center"][0] - scx) + abs(r["center"][1] - scy)) if len(rooms) > 1 else rooms[0]
     ecx, ecy = exit_room["center"]
@@ -219,13 +229,17 @@ def generate_backrooms_level(level_id, player=None):
         for x in range(cols):
             rect = (x * settings.TILE_SIZE, y * settings.TILE_SIZE, settings.TILE_SIZE, settings.TILE_SIZE)
             cell = grid[y][x]
-            if cell == WALL_CELL: walls.append(rect)
-            elif cell == EXIT_CELL: exit_tiles.append(rect)
+            if cell == WALL_CELL: 
+                walls.append(rect)
+            elif cell == EXIT_CELL: 
+                exit_tiles.append(rect)
             else:
                 rtype = room_type_grid[y][x] or DEFAULT_ROOM_TYPE
                 density = settings.ROOM_TYPES.get(rtype, {}).get("hazard_density", DEFAULT_HAZARD_DENSITY)
-                if (x, y) != (scx, scy) and random.random() < density: hazard_tiles.append(rect)
-                else: floors.append(rect)
+                if (x, y) != (scx, scy) and random.random() < density: 
+                    hazard_tiles.append(rect)
+                else: 
+                    floors.append(rect)
 
     wall_segments = _extract_wall_segments(grid, cols, rows)
 
