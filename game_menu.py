@@ -1,7 +1,6 @@
 import os
 
 import pygame as pg
-from player import is_dead
 TARGET_FPS = 60
 
 # Shared values used by the menu before the game module is loaded.
@@ -353,8 +352,8 @@ def death_screen():
 
             if event.type == pg.MOUSEBUTTONDOWN:
                 if retry_button.is_hovered():
-                    global is_dead
-                    is_dead = False
+                    import player
+                    player.is_dead = False
                     return  # Return to the main menu to restart the game
                 elif quit_button.is_hovered():
                     pg.quit()

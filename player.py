@@ -2,7 +2,6 @@ import pygame as pg
 import glpg as gl
 import random
 import settings
-from game_menu import death_screen
 
 PLAYER_SIZE = 40
 MAX_STAT = 100
@@ -150,6 +149,8 @@ class Player:
                 self.sanity = max(0, self.sanity - HAZARD_SANITY_DAMAGE * dt)
                 if "hurt" in settings.SOUNDS and not pg.mixer.Channel(0).get_busy():
                     settings.SOUNDS["hurt"].play()
+                if self.health <= 0:
+                    self.die()
                 break
 
         touching_exit = False
@@ -180,6 +181,7 @@ class Player:
             is_dead = True
 
         if is_dead:
+            from game_menu import death_screen
             death_screen()
 
     def update(self, dt, walls_list, hazard_tiles, exit_tiles, map_width, map_height):
@@ -226,7 +228,7 @@ class Player:
             frame_surf = pg.Surface((self.sprite_w, self.sprite_h), pg.SRCALPHA)
             frame_surf.blit(settings.TEXTURES["player_sheet"], (0, 0), sheet_rect)
             scaled_player = pg.transform.scale(frame_surf, (self.size, self.size))
-            pg.display.get_surface().blit(scaled_player, (self.x - cam_x + shiver_x, self.y - cam_y + shiver_y))
+            gl.get_screen().blit(scaled_player, (self.x - cam_x + shiver_x, self.y - cam_y + shiver_y))
         else:
             gl.draw.rect(self.x - cam_x + shiver_x, self.y - cam_y + shiver_y, self.size, self.size, "green")
 
@@ -236,7 +238,7 @@ class Player:
         self.draw_meter(HUD_X, SANITY_Y, HUD_WIDTH, STAT_HEIGHT, self.sanity, self.max_sanity, (40, 10, 40), (160, 40, 180))
 
         lvl_text = settings.ui_font.render(f"LEVEL: {level_index}", True, "white")
-        pg.display.get_surface().blit(lvl_text, (HUD_X, LEVEL_TEXT_Y))
+        gl.get_screen().blit(lvl_text, (HUD_X, LEVEL_TEXT_Y))
 
     def draw_meter(self, x, y, width, height, value, maximum, background, foreground):
         gl.draw.rect(x, y, width, height, background)

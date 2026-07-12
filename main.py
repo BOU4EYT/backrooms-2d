@@ -195,7 +195,11 @@ def update(dt):
 
 @gl.on_draw
 def draw():
-    surface = pg.display.get_surface()
+    # Use glpg's own screen reference instead of pg.display.get_surface() —
+    # on some platforms pygame's global "current display surface" can
+    # momentarily desync from the surface glpg is actually filling/flipping
+    # each frame, which was returning None here.
+    surface = gl.get_screen()
 
     def room_tint_for(px, py, kind):
         tx, ty = int(px // settings.TILE_SIZE), int(py // settings.TILE_SIZE)
