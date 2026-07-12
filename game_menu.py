@@ -1,7 +1,7 @@
 import os
 
 import pygame as pg
-
+from player import is_dead
 TARGET_FPS = 60
 
 # Shared values used by the menu before the game module is loaded.
@@ -331,6 +331,44 @@ def settings_menu():
         pg.display.flip()
         clock.tick(TARGET_FPS)
 
+def death_screen():
+    """Display the death screen when the player dies."""
+    # Load the background image or fall back to a generated surface
+    background = load_menu_background("assets/images/death_screen_background.png", (1280, 720))
+
+    # Load the font or fall back to a system font
+    font = load_menu_font("assets/fonts/PressStart2P-Regular.ttf", 24)
+
+    # Create the buttons
+    retry_button = MenuButton("Retry", font, (640, 400), (240, 56), "green")
+    quit_button = MenuButton("Quit", font, (640, 500), (240, 56), "red")
+
+    # Main loop
+    while True:
+        # handle events
+        for event in pg.event.get():
+            if event.type == pg.QUIT:
+                pg.quit()
+                return
+
+            if event.type == pg.MOUSEBUTTONDOWN:
+                if retry_button.is_hovered():
+                    global is_dead
+                    is_dead = False
+                    return  # Return to the main menu to restart the game
+                elif quit_button.is_hovered():
+                    pg.quit()
+                    return
+
+        # Draw the background
+        get_screen().blit(background, (0, 0))
+
+        # draw buttons
+        retry_button.draw()
+        quit_button.draw()
+
+        pg.display.flip()
+        clock.tick(TARGET_FPS)
 
 if __name__ == "__main__":
     main_menu()

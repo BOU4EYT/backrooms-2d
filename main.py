@@ -6,7 +6,7 @@ import glpg as gl
 
 import generator
 import settings
-from player import Player
+from player import Player, is_dead
 
 SCREEN_WIDTH = 1280
 SCREEN_HEIGHT = 720
@@ -42,6 +42,7 @@ current_level_index = 0
 fade_alpha = 0
 fade_state = "idle"
 pending_level_id = None
+HAZARD_VARIANT_CACHE = {}
 
 
 def start_level_transition(next_level_id):
@@ -83,6 +84,67 @@ def start_game():
 
 def clamp(value, minimum, maximum):
     return max(minimum, min(value, maximum))
+
+
+def hazard_connectivity_mask(tile_x, tile_y, hazard_positions):
+    """Return a bitmask describing which neighboring hazard tiles are connected."""
+    mask = 0
+    directions = ((0, -1), (1, 0), (0, 1), (-1, 0), (1, -1), (1, 1), (-1, 1), (-1, -1))
+    for bit, (dx, dy) in enumerate(directions):
+        if (tile_x + dx, tile_y + dy) in hazard_positions:
+            mask |= 1 << bit
+    return mask
+
+
+def _hazard_cell_name(mask):
+    """Map a 4-directional neighbor mask (N=1, E=2, S=4, W=8) onto one of the
+    10 atlas cells, using the standard 9-slice-plus-isolated scheme: corners
+    win when two adjacent sides are both open, a single open side gives an
+    edge piece, no open sides gives the full interior, and no neighbors at
+    all gives the standalone variant tile."""
+    n = bool(mask & 0b0001)
+    e = bool(mask & 0b0010)
+    s = bool(mask & 0b0100)
+    w = bool(mask & 0b1000)
+
+    if not (n or e or s or w):
+        return "VR"
+    if not n and not w:
+        return "TL"
+    if not n and not e:
+        return "TR"
+    if not s and not w:
+        return "BL"
+    if not s and not e:
+        return "BR"
+    if not n:
+        return "TC"
+    if not s:
+        return "BC"
+    if not w:
+        return "CL"
+    if not e:
+        return "CR"
+    return "CC"
+
+
+def build_hazard_tile_surface(tile_x, tile_y, hazard_positions):
+    """Look up the correctly-connected autotile cell for this hazard tile from
+    the sliced atlas (settings.TEXTURES['hazard_tiles']), based on which of
+    its 4 orthogonal neighbors are also hazard tiles."""
+    mask = hazard_connectivity_mask(tile_x, tile_y, hazard_positions)
+    cache_key = (mask, settings.TILE_SIZE)
+    if cache_key in HAZARD_VARIANT_CACHE:
+        return HAZARD_VARIANT_CACHE[cache_key]
+
+    hazard_tiles = settings.TEXTURES.get("hazard_tiles")
+    if not hazard_tiles:
+        return None
+
+    cell_name = _hazard_cell_name(mask)
+    tile_surface = hazard_tiles.get(cell_name, hazard_tiles.get("VR"))
+    HAZARD_VARIANT_CACHE[cache_key] = tile_surface
+    return tile_surface
 
 
 def apply_shadow_blur(surface, blur_radius=1):
@@ -149,9 +211,16 @@ def draw():
         else:
             gl.draw.rect(floor[0] - cam_x, floor[1] - cam_y, floor[2], floor[3], room_tint_for(floor[0], floor[1], "floor"))
 
+    hazard_positions = {(int(haz[0] // settings.TILE_SIZE), int(haz[1] // settings.TILE_SIZE)) for haz in generator.hazard_tiles}
     for haz in generator.hazard_tiles:
+        tile_x = int(haz[0] // settings.TILE_SIZE)
+        tile_y = int(haz[1] // settings.TILE_SIZE)
         if "hazard" in settings.TEXTURES:
-            surface.blit(settings.TEXTURES["hazard"], (haz[0] - cam_x, haz[1] - cam_y))
+            hazard_surface = build_hazard_tile_surface(tile_x, tile_y, hazard_positions)
+            if hazard_surface is not None:
+                surface.blit(hazard_surface, (haz[0] - cam_x, haz[1] - cam_y))
+            else:
+                gl.draw.rect(haz[0] - cam_x, haz[1] - cam_y, haz[2], haz[3], settings.TILE_COLORS["hazard"])
         else:
             gl.draw.rect(haz[0] - cam_x, haz[1] - cam_y, haz[2], haz[3], settings.TILE_COLORS["hazard"])
 

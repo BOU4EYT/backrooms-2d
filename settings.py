@@ -27,6 +27,26 @@ TEXTURE_ASSET_MAPPING = {
 }
 AUDIO_ASSET_NAMES = ["hurt", "pickup", "ambient_buzz", "player_walk", "exit_door"]
 
+# lava.png/hazard.png ship as a 10-cell autotile atlas, not a single tile.
+# Pixel rects measured directly from the sheet (1134x928): 3 columns for the
+# top/middle rows (split at x=378/758), 4 columns for the bottom row (split
+# at x=378/628/869), rows split at y=281 and y=622-652. Naively scaling the
+# whole sheet down to one TILE_SIZE square (the old generic loader path)
+# squashed all 10 pieces together, which is why hazard clusters never
+# tiled/connected correctly.
+HAZARD_SHEET_RECTS = {
+    "TL": (0, 0, 378, 281),
+    "TC": (379, 0, 757, 281),
+    "TR": (759, 0, 1133, 281),
+    "CL": (0, 282, 378, 621),
+    "CC": (379, 282, 757, 621),
+    "CR": (759, 282, 1133, 621),
+    "BL": (0, 653, 378, 899),
+    "BC": (379, 653, 628, 899),
+    "BR": (630, 653, 869, 899),
+    "VR": (870, 653, 1133, 899),
+}
+
 # Shared asset registries populated at import time.
 TEXTURES = {}
 SOUNDS = {}
@@ -70,6 +90,30 @@ def load_all_assets():
                 image = pg.image.load(path).convert_alpha()
                 if game_name == "player":
                     TEXTURES["player_sheet"] = image
+                elif game_name == "hazard":
+                    # Check if this is a full autotile atlas or a simple single-tile image
+                    img_width, img_height = image.get_size()
+                    hazard_tiles = {}
+                    
+                    # If the image is large enough for the autotile atlas, slice it
+                    if img_width >= 1134 and img_height >= 928:
+                        # This is an autotile atlas (see HAZARD_SHEET_RECTS), not a
+                        # single tile - slice each named cell out and scale it
+                        # individually so the connected-tile art survives.
+                        for cell_name, (x0, y0, x1, y1) in HAZARD_SHEET_RECTS.items():
+                            cell = image.subsurface(pg.Rect(x0, y0, x1 - x0, y1 - y0)).copy()
+                            hazard_tiles[cell_name] = pg.transform.smoothscale(cell, (TILE_SIZE, TILE_SIZE))
+                    else:
+                        # Simple single-tile image - use it for all variants
+                        scaled = pg.transform.scale(image, (TILE_SIZE, TILE_SIZE))
+                        for cell_name in HAZARD_SHEET_RECTS.keys():
+                            hazard_tiles[cell_name] = scaled
+                    
+                    TEXTURES["hazard_tiles"] = hazard_tiles
+                    # Keep a plain "hazard" entry (the fully-surrounded/interior
+                    # piece) so existing "if 'hazard' in TEXTURES" checks elsewhere
+                    # still work as a simple presence flag / fallback.
+                    TEXTURES["hazard"] = hazard_tiles["CC"]
                 else:
                     TEXTURES[game_name] = pg.transform.scale(image, (TILE_SIZE, TILE_SIZE))
 

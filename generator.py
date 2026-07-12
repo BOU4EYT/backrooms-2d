@@ -220,10 +220,17 @@ def generate_backrooms_level(level_id, player=None):
             a, b = random.sample(range(len(rooms)), 2)
             carve_corridor(rooms[a]["center"], rooms[b]["center"])
 
-    exit_room = max(rooms[1:], key=lambda r: abs(r["center"][0] - scx) + abs(r["center"][1] - scy)) if len(rooms) > 1 else rooms[0]
-    ecx, ecy = exit_room["center"]
-    grid[ecy][ecx] = EXIT_CELL
-    room_type_grid[ecy][ecx] = exit_room["type"]
+    if len(rooms) > 1:
+        exit_room = max(rooms[1:], key=lambda r: abs(r["center"][0] - scx) + abs(r["center"][1] - scy))
+        ecx, ecy = exit_room["center"]
+        grid[ecy][ecx] = EXIT_CELL
+        room_type_grid[ecy][ecx] = exit_room["type"]
+    # BUGFIX: previously fell back to rooms[0] (the spawn room) when only one
+    # room existed, which stamps the exit tile directly onto the spawn cell -
+    # an instant "level complete" the moment the level loads, with nothing to
+    # explore. Since we already guard the single-room case elsewhere (see the
+    # corridor bugfix above), just skip placing an exit tile in that scenario
+    # instead of overwriting the spawn.
 
     for y in range(rows):
         for x in range(cols):

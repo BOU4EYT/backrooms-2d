@@ -2,11 +2,14 @@ import pygame as pg
 import glpg as gl
 import random
 import settings
+from game_menu import death_screen
 
 PLAYER_SIZE = 40
 MAX_STAT = 100
 BASE_SPEED = 150.0  # Converted to pixels-per-second instead of per-frame
 SPRINT_SPEED = 300.0
+EXHAUSTION_SPEED = 75.0  # Exhaustion penalty speed (half of base)
+EXHAUSTION_DURATION = 2.0  # How long exhaustion lasts in seconds
 HOTBAR_SLOTS = 5
 VIEW_RADIUS = 240
 STAMINA_SPRINT_DRAIN = 42.0  # Scaled for delta-time
@@ -37,6 +40,7 @@ LEVEL_TEXT_Y = 75
 HUD_WIDTH = 200
 HEALTH_HEIGHT = 15
 STAT_HEIGHT = 10
+is_dead = False
 
 class Player:
     def __init__(self, x, y):
@@ -67,6 +71,8 @@ class Player:
         self.footstep_timer = 0.0
         self.walk_step_interval = WALK_STEP_INTERVAL
         self.sprint_step_interval = SPRINT_STEP_INTERVAL
+        self.was_sprinting = False
+        self.exhaustion_timer = 0.0
 
     def handle_input(self, dt, walls_list, map_width, map_height):
         self.is_moving = False
@@ -76,10 +82,17 @@ class Player:
         if gl.key("shift") and self.stamina > 0 and is_moving_keys:
             self.current_speed = self.sprint_speed
             self.stamina = max(0, self.stamina - STAMINA_SPRINT_DRAIN * dt)
+            # If stamina just depleted, trigger exhaustion
+            if self.stamina == 0:
+                self.exhaustion_timer = EXHAUSTION_DURATION
+        elif self.exhaustion_timer > 0:
+            # Exhaustion penalty: reduced speed
+            self.current_speed = EXHAUSTION_SPEED
+            self.exhaustion_timer -= dt
         else:
             self.current_speed = self.base_speed
-            if not gl.key("shift") or not is_moving_keys:
-                self.stamina = min(self.max_stamina, self.stamina + STAMINA_RECOVERY * dt)
+            # Only recover stamina when NOT actively sprinting and not exhausted
+            self.stamina = min(self.max_stamina, self.stamina + STAMINA_RECOVERY * dt)
 
         if gl.key("a"): dx -= self.current_speed * dt; self.dir_x, self.dir_y = -1, 0; self.is_moving = True
         if gl.key("d"): dx += self.current_speed * dt; self.dir_x, self.dir_y = 1, 0; self.is_moving = True
@@ -87,13 +100,21 @@ class Player:
         if gl.key("s"): dy += self.current_speed * dt; self.dir_x, self.dir_y = 0, 1; self.is_moving = True
 
         if self.is_moving and "player_walk" in settings.SOUNDS:
-            current_interval = self.sprint_step_interval if self.current_speed > self.base_speed else self.walk_step_interval
+            is_sprinting = self.current_speed > self.base_speed
+            current_interval = self.sprint_step_interval if is_sprinting else self.walk_step_interval
+            
+            # Reset timer when switching between sprint/walk to sync sound immediately
+            if is_sprinting != self.was_sprinting:
+                self.footstep_timer = 0.0
+            self.was_sprinting = is_sprinting
+            
             self.footstep_timer += dt
             if self.footstep_timer >= current_interval:
                 pg.mixer.Channel(1).play(settings.SOUNDS["player_walk"])
                 self.footstep_timer = 0.0
         else:
-            self.footstep_timer = self.walk_step_interval
+            self.footstep_timer = 0.0
+            self.was_sprinting = False
 
         if self.flashlight_debounce > 0: 
             self.flashlight_debounce -= dt
@@ -146,6 +167,20 @@ class Player:
         if not touching_exit: 
             self.on_exit = False
         return False
+
+    def die(self):
+        if "death" in settings.SOUNDS:
+            settings.SOUNDS["death"].play()
+        self.health = 0
+        self.stamina = 0
+        self.sanity = 0
+
+        if self.health <= 0:
+            global is_dead
+            is_dead = True
+
+        if is_dead:
+            death_screen()
 
     def update(self, dt, walls_list, hazard_tiles, exit_tiles, map_width, map_height):
         self.handle_input(dt, walls_list, map_width, map_height)
